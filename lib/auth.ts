@@ -11,6 +11,39 @@ import { syncGithubProfileOnLogin } from "@/lib/github-account";
 import { bindCollaboratorInvitesToUser } from "@/lib/collaborator-access";
 import { LoginEmailTemplate } from "@/components/email/login";
 import { render } from "@react-email/render";
+import { sql } from "drizzle-orm";
+
+// --- Local patch: GitHub login for admins only; everyone else must be invited and use email ---
+const GITHUB_CALLBACK_PATH = "/callback/:id";
+
+const normalize = (email?: string | null) => (email || "").trim().toLowerCase();
+
+const isAdminEmail = (email?: string | null) => {
+  const admins = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((entry) => normalize(entry))
+    .filter(Boolean);
+  return !!normalize(email) && admins.includes(normalize(email));
+};
+
+const isInvitedEmail = async (email?: string | null) => {
+  const value = normalize(email);
+  if (!value) return false;
+  const collaborator = await db.query.collaboratorTable.findFirst({
+    where: (table) => sql`lower(${table.email}) = ${value}`,
+  });
+  if (collaborator) return true;
+  const invite = await db.query.collaboratorInviteTable.findFirst({
+    where: (table) => sql`lower(${table.email}) = ${value}`,
+  });
+  return !!invite;
+};
+
+const canAuthenticate = async (email: string | null | undefined, path: string | undefined) => {
+  if (path === GITHUB_CALLBACK_PATH) return isAdminEmail(email);
+  return isAdminEmail(email) || (await isInvitedEmail(email));
+};
+// --- End local patch ---
 
 export const auth = betterAuth({
   baseURL: getBaseUrl(),
@@ -111,8 +144,29 @@ export const auth = betterAuth({
     },
   }),
   databaseHooks: {
+    user: {
+      create: {
+        before: async (user, ctx) => {
+          if (!(await canAuthenticate(user.email, ctx?.path))) {
+            console.warn("[auth] blocked sign-up", { email: user.email, path: ctx?.path });
+            return false;
+          }
+          return { data: user };
+        },
+      },
+    },
     session: {
       create: {
+        before: async (session, ctx) => {
+          const user = await db.query.userTable.findFirst({
+            where: (table, { eq }) => eq(table.id, session.userId),
+          });
+          if (!(await canAuthenticate(user?.email, ctx?.path))) {
+            console.warn("[auth] blocked login", { email: user?.email, path: ctx?.path });
+            return false;
+          }
+          return { data: session };
+        },
         after: async (session) => {
           try {
             await repairLegacyGithubStubOnLogin(session.id, session.userId);
@@ -163,6 +217,10 @@ export const auth = betterAuth({
       resendStrategy: "reuse",
       sendVerificationOTP: async ({ email, otp, type }) => {
         if (type !== "sign-in") return;
+        if (!isAdminEmail(email) && !(await isInvitedEmail(email))) {
+          console.warn("[auth] not sending login code to uninvited email", { email });
+          return;
+        }
 
         const subject = `Your Pages CMS temporary code is ${otp}`;
         const html = await render(
