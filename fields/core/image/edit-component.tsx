@@ -47,7 +47,7 @@ type FieldOptions = {
   rename?: boolean | "safe" | "random";
 };
 
-const ImageTeaser = ({ file, config, onRemove }: { 
+export const ImageTeaser = ({ file, config, onRemove }: { 
   file: string;
   config: Pick<Config, "owner" | "repo" | "branch">;
   onRemove?: () => void;
