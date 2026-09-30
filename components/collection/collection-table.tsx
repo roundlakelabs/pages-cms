@@ -74,8 +74,7 @@ export function CollectionTable<TData extends TableData>({
   pathname,
   path,
   isTree = false,
-  primaryField,
-  grid
+  primaryField
 }: {
   columns: any[],
   data: Record<string, any>[],
@@ -86,11 +85,7 @@ export function CollectionTable<TData extends TableData>({
   pathname: string,
   path: string,
   isTree?: boolean,
-  primaryField?: string,
-  grid?: {
-    columns: number,
-    renderItem: (row: Row<TData>) => React.ReactNode
-  }
+  primaryField?: string
 }) {
   const [expanded, setExpanded] = useState<ExpandedState>({});
   
@@ -191,24 +186,6 @@ export function CollectionTable<TData extends TableData>({
 
   return (
     <div className="space-y-2">
-      {grid ? (
-        table.getRowModel().rows?.length ? (
-          <div
-            className="grid gap-2"
-            style={{ gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))` }}
-          >
-            {table.getRowModel().rows.map((row) => (
-              <div key={row.id} className="min-w-0">
-                {grid.renderItem(row as Row<TData>)}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center text-muted-foreground text-sm p-6">
-            <span>No entries</span>
-          </div>
-        )
-      ) : (
       <Table className="border-separate border-spacing-0 text-sm">
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
@@ -345,7 +322,6 @@ export function CollectionTable<TData extends TableData>({
           )}
         </TableBody>
       </Table>
-      )}
       {pageCount > 1 && (
         <footer className="flex items-center justify-end">
           <Pagination className="mx-0 w-auto justify-end">
