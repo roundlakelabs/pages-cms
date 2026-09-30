@@ -14,7 +14,7 @@ import { getSchemaByName } from "@/lib/schema";
 import { Thumbnail } from "@/components/thumbnail";
 import { ImageTeaser } from "@/fields/core/image/edit-component";
 import { getAllowedExtensions } from "@/fields/core/image";
-import { getColumns } from "./index";
+import { getColumns, getAspectRatio } from "./index";
 import type { Config } from "@/types/config";
 import type { Field } from "@/types/field";
 import type { FileSaveData } from "@/types/api";
@@ -47,10 +47,11 @@ type FieldOptions = {
   rename?: boolean | "safe" | "random";
 };
 
-const GalleryCell = ({ id, file, index, config, media, onRemove, readonly = false }: {
+const GalleryCell = ({ id, file, index, aspectRatio, config, media, onRemove, readonly = false }: {
   id: string;
   file: string;
   index: number;
+  aspectRatio: string;
   config: Pick<Config, "owner" | "repo" | "branch">;
   media: string;
   onRemove?: () => void;
@@ -70,18 +71,22 @@ const GalleryCell = ({ id, file, index, config, media, onRemove, readonly = fals
     transition,
     opacity: isDragging ? 0.5 : 1,
     zIndex: isDragging ? 1 : 0,
-    position: 'relative' as const
+    position: 'relative' as const,
+    aspectRatio,
   };
 
+  // Controls stay hidden so the grid reads like the site; they appear on hover/focus.
   return (
-    <div ref={setNodeRef} style={style} className="aspect-square min-w-0">
+    <div ref={setNodeRef} style={style} className="group min-w-0">
       <div title={file} className={readonly ? "h-full" : "h-full cursor-move"} {...(!readonly ? attributes : {})} {...(!readonly ? listeners : {})}>
-        <Thumbnail name={media} path={file} className="rounded-md w-full h-full"/>
+        <Thumbnail name={media} path={file} className="aspect-auto rounded-sm w-full h-full"/>
       </div>
-      <span className="absolute top-1 left-1 rounded bg-background/95 px-1.5 text-xs text-muted-foreground tabular-nums backdrop-blur-sm">
-        {index + 1}
-      </span>
-      <ImageTeaser file={file} config={config} onRemove={onRemove} />
+      <div className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <span className="absolute top-1 left-1 rounded bg-background/95 px-1.5 text-xs text-muted-foreground tabular-nums backdrop-blur-sm">
+          {index + 1}
+        </span>
+        <ImageTeaser file={file} config={config} onRemove={onRemove} />
+      </div>
     </div>
   );
 };
@@ -94,6 +99,7 @@ const EditComponent = forwardRef((props: EditorProps, ref: React.Ref<HTMLInputEl
   const options = (field.options ?? {}) as FieldOptions;
   const isReadonly = Boolean(field.readonly);
   const columns = getColumns(field);
+  const aspectRatio = getAspectRatio(field);
 
   const [files, setFiles] = useState<FileEntry[]>(() => {
     const paths = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
@@ -214,7 +220,7 @@ const EditComponent = forwardRef((props: EditorProps, ref: React.Ref<HTMLInputEl
       <MediaUpload.DropZone>
         <div className="space-y-2">
           <div
-            className="grid gap-2"
+            className="grid gap-1"
             style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
           >
             <DndContext
@@ -232,6 +238,7 @@ const EditComponent = forwardRef((props: EditorProps, ref: React.Ref<HTMLInputEl
                     id={file.id}
                     file={file.path}
                     index={index}
+                    aspectRatio={aspectRatio}
                     config={config}
                     media={mediaConfig.name}
                     onRemove={isReadonly ? undefined : () => handleRemove(file.id)}
@@ -241,7 +248,7 @@ const EditComponent = forwardRef((props: EditorProps, ref: React.Ref<HTMLInputEl
               </SortableContext>
             </DndContext>
             {Array.from({ length: files.length === 0 ? columns : placeholderCount }, (_, i) => (
-              <div key={`placeholder-${i}`} className="aspect-square rounded-md border border-dashed" />
+              <div key={`placeholder-${i}`} className="rounded-sm border border-dashed" style={{ aspectRatio }} />
             ))}
           </div>
           {!isReadonly && remainingSlots > 0 && (

@@ -25,7 +25,20 @@ const getColumns = (field: Field): number => {
   return Math.min(columns, MAX_COLUMNS);
 };
 
-const read = (value: any, field: Field, config: Record<string, any>) => {
+// Accepts "4/3", "4:3" or a number (e.g. 1.5). Falls back to square.
+const getAspectRatio = (field: Field): string => {
+  const aspect = field.options?.aspect;
+  if (typeof aspect === "number" && aspect > 0) return String(aspect);
+  if (typeof aspect === "string") {
+    const match = aspect.trim().match(/^(\d+(?:\.\d+)?)\s*[/:]\s*(\d+(?:\.\d+)?)$/);
+    if (match && Number(match[1]) > 0 && Number(match[2]) > 0) return `${match[1]} / ${match[2]}`;
+    const ratio = Number(aspect);
+    if (ratio > 0) return String(ratio);
+  }
+  return "1 / 1";
+};
+
+const read =(value: any, field: Field, config: Record<string, any>) => {
   if (typeof value === "string") value = [value];
   return imageField.read(value, toImageField(field), config);
 };
@@ -43,4 +56,4 @@ const defaultValue = () => [];
 
 const label = "Gallery";
 
-export { label, schema, ViewComponent, EditComponent, read, write, defaultValue, toImageField, getColumns };
+export { label, schema, ViewComponent, EditComponent, read, write, defaultValue, toImageField, getColumns, getAspectRatio };
