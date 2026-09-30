@@ -33,6 +33,7 @@ import { requireApiSuccess } from "@/lib/api-client";
 import { EmptyCreate } from "@/components/empty-create";
 import { FileOptions } from "@/components/file/file-options";
 import { CollectionTable } from "./collection-table";
+import { Thumbnail } from "@/components/thumbnail";
 import { FolderCreate } from "@/components/folder-create";
 import { resolveContentOperations } from "@/lib/operations";
 import { useRepoHeader } from "@/components/repo/repo-header-context";
@@ -76,7 +77,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { EllipsisVertical, FolderPlus, Plus, Search } from "lucide-react";
+import { EllipsisVertical, Folder, FolderPlus, Plus, Search } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -86,6 +87,17 @@ import {
 type GroupTrailItem = {
   name: string;
   label?: string | null;
+};
+
+// Accepts "4/3", "4:3" or a number (e.g. 1.5). Falls back to square.
+const parseAspectRatio = (aspect: unknown): string => {
+  if (typeof aspect === "number" && aspect > 0) return String(aspect);
+  if (typeof aspect === "string") {
+    const match = aspect.trim().match(/^(\d+(?:\.\d+)?)\s*[/:]\s*(\d+(?:\.\d+)?)$/);
+    if (match && Number(match[1]) > 0 && Number(match[2]) > 0) return `${match[1]} / ${match[2]}`;
+    if (Number(aspect) > 0) return aspect.trim();
+  }
+  return "1 / 1";
 };
 
 const CollectionHeaderActions = memo(function CollectionHeaderActions({
@@ -253,11 +265,34 @@ export function Collection({ name, path }: { name: string; path?: string }) {
     () => getSchemaActions(schema, "collection"),
     [schema],
   );
+  // Grid layout: entries render as image tiles, e.g. to preview a photo gallery.
+  const gridView = useMemo(() => {
+    if (schema.view?.layout !== "grid") return null;
+    const grid = schema.view.grid ?? {};
+    const imagePath: string | undefined =
+      grid.image ??
+      schema.fields?.find((field: any) => field.type === "image")?.name;
+    const imageField = imagePath
+      ? getFieldByPath(schema.fields, imagePath)
+      : undefined;
+    const columns = grid.columns ?? 4;
+    return {
+      columns,
+      rows: grid.rows as number | undefined,
+      imagePath,
+      media:
+        (imageField?.options?.media as string | undefined) ||
+        config.object?.media?.[0]?.name,
+      aspectRatio: parseAspectRatio(grid.aspect),
+    };
+  }, [schema, config.object]);
+
   const requestedFieldPaths = useMemo(() => {
     const paths = new Set<string>(["name", "path", primaryField]);
     viewFields.forEach((item: any) => paths.add(item.path));
+    if (gridView?.imagePath) paths.add(gridView.imagePath);
     return Array.from(paths);
-  }, [primaryField, viewFields]);
+  }, [primaryField, viewFields, gridView?.imagePath]);
 
   const handleTableSearchChange = useCallback((value: string) => {
     setTableSearch(value);
@@ -693,10 +728,85 @@ export function Collection({ name, path }: { name: string; path?: string }) {
         },
       ],
       pagination: {
-        pageSize: 25,
+        pageSize: gridView?.rows ? gridView.columns * gridView.rows : 25,
       },
     };
-  }, [schema, primaryField, viewFields]);
+  }, [schema, primaryField, viewFields, gridView]);
+
+  const gridProps = useMemo(() => {
+    if (!gridView) return undefined;
+    const editBase = `/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/collection/${encodeURIComponent(name)}/edit/`;
+
+    return {
+      columns: gridView.columns,
+      renderItem: (row: any) => {
+        const entry = row.original;
+        if (entry.type === "dir") {
+          return (
+            <Link
+              href={`${pathname}?path=${encodeURIComponent(entry.path)}`}
+              className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed text-sm font-medium text-muted-foreground hover:text-foreground"
+              style={{ aspectRatio: gridView.aspectRatio }}
+            >
+              <Folder className="size-5" />
+              <span className="truncate max-w-full px-2">{entry.name}</span>
+            </Link>
+          );
+        }
+
+        const imageValue = gridView.imagePath
+          ? safeAccess(entry.fields, gridView.imagePath)
+          : null;
+        const imageSrc = Array.isArray(imageValue) ? imageValue[0] : imageValue;
+        const label = safeAccess(entry.fields, primaryField) ?? entry.name;
+        const href = `${editBase}${encodeURIComponent(entry.path)}`;
+
+        return (
+          <div className="group relative">
+            <Link href={href} title={String(label)}>
+              <Thumbnail
+                name={gridView.media}
+                path={typeof imageSrc === "string" && imageSrc ? imageSrc : null}
+                className="aspect-auto rounded-md"
+                style={{ aspectRatio: gridView.aspectRatio }}
+              />
+            </Link>
+            <div className="absolute top-1 right-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <FileOptions
+                path={entry.path}
+                sha={entry.sha}
+                type="collection"
+                name={name}
+                canDelete={canDelete}
+                canRename={canRename}
+                onDelete={handleDelete}
+                onRename={handleRename}
+              >
+                <Button variant="secondary" size="icon-sm" aria-label="Entry options">
+                  <EllipsisVertical />
+                </Button>
+              </FileOptions>
+            </div>
+            <Link href={href} className="mt-1 block truncate text-sm">
+              {String(label)}
+            </Link>
+          </div>
+        );
+      },
+    };
+  }, [
+    gridView,
+    config.owner,
+    config.repo,
+    config.branch,
+    name,
+    pathname,
+    primaryField,
+    canDelete,
+    canRename,
+    handleDelete,
+    handleRename,
+  ]);
 
   const handleNavigate = useCallback(
     (newPath: string) => {
@@ -1027,6 +1137,7 @@ export function Collection({ name, path }: { name: string; path?: string }) {
       path={path || schema.path}
       isTree={schema.view?.layout === "tree"}
       primaryField={primaryField}
+      grid={gridProps}
     />
   );
 
