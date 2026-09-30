@@ -553,9 +553,39 @@ const ContentLeafSchema = z
       .object(
         {
           layout: z
-            .enum(["tree", "list"], {
-              message: "'layout' must be either 'tree' or 'list'.",
+            .enum(["tree", "list", "grid"], {
+              message: "'layout' must be 'tree', 'list' or 'grid'.",
             })
+            .optional(),
+          grid: z
+            .object(
+              {
+                columns: z
+                  .number({ message: "'columns' must be a number." })
+                  .int("'columns' must be an integer.")
+                  .min(1, "'columns' must be at least 1.")
+                  .max(12, "'columns' must be at most 12.")
+                  .optional(),
+                rows: z
+                  .number({ message: "'rows' must be a number." })
+                  .int("'rows' must be an integer.")
+                  .min(1, "'rows' must be at least 1.")
+                  .optional(),
+                image: z
+                  .string({ message: "'image' must be a string." })
+                  .optional(),
+                aspect: z
+                  .union([z.string(), z.number()], {
+                    message: "'aspect' must be a string (e.g. \"4/3\") or a number.",
+                  })
+                  .optional(),
+              },
+              {
+                message:
+                  "'grid' must be an object with 'columns', 'rows', 'image' and 'aspect' attributes.",
+              },
+            )
+            .strict()
             .optional(),
           node: z
             .union(
