@@ -237,6 +237,32 @@ const MediaSchema = z.union([
   }),
 ]);
 
+// Grid display for a list of images (or objects with an image subfield)
+const ListGridSchema = z
+  .object(
+    {
+      columns: z
+        .number({ message: "'columns' must be a number." })
+        .int("'columns' must be an integer.")
+        .min(1, "'columns' must be at least 1.")
+        .max(12, "'columns' must be at most 12.")
+        .optional(),
+      image: z
+        .string({ message: "'image' must be a string." })
+        .optional(),
+      aspect: z
+        .union([z.string(), z.number()], {
+          message: "'aspect' must be a string (e.g. \"4/3\") or a number.",
+        })
+        .optional(),
+    },
+    {
+      message:
+        "'grid' must be an object with 'columns', 'image' and 'aspect' attributes.",
+    },
+  )
+  .strict();
+
 // Schema for list attribute (used in both field and content entries)
 const ListSchema = z.union([
   z.boolean(),
@@ -263,7 +289,8 @@ const ListSchema = z.union([
                 "'collapsible' must be either a boolean or an object with 'collapsed' and 'summary' properties.",
             },
           ),
-        ]),
+        ]).optional(),
+        grid: ListGridSchema.optional(),
       },
       {
         message:
@@ -468,6 +495,20 @@ const generateFieldObjectSchema = (
               path: ["type", "component"],
             });
           }
+        }
+
+        if (
+          data.list &&
+          typeof data.list === "object" &&
+          data.list.grid !== undefined &&
+          !["object", "image"].includes(data.type)
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "'list.grid' is only supported on 'object' and 'image' fields.",
+            path: ["list", "grid"],
+          });
         }
 
         if (data.type === "block" && data.blocks === undefined) {
