@@ -136,6 +136,58 @@ The helper in v2.1.8 generates a manifest that GitHub rejects:
 
 This is only needed if we ever recreate the GitHub App. Check whether upstream has fixed it first.
 
+### 3. Grid layout for list fields (`list.grid`)
+
+Shows a list field as a grid of image tiles instead of stacked rows, so editors see a photo gallery the way the site lays it out. It only changes the editor. **The stored data doesn't change:** the list is still one array in one file, in the same order.
+
+**When to use it:** a list of photos in a single content file, e.g. hhcookies' `src/_data/gallery.json` (`{ "photos": [ { "image": "...", "alt": "" }, ... ] }`).
+
+**Config** (in the site repo's `.pages.yml`):
+
+```yaml
+- name: photos
+  label: Photos
+  type: object
+  list:
+    grid:
+      columns: 3      # tiles per row, 1–12 (default 4)
+      image: image    # subfield shown on the tile (default: first image subfield)
+      aspect: 1       # tile shape: "4/3", "4:3" or a number (default square)
+  fields:
+    - { name: image, type: image, required: true, options: { media: gallery } }
+    - { name: alt, type: string }
+```
+
+It also works on a plain image list, where each item is just a path string and is used as the tile directly:
+
+```yaml
+- name: photos
+  type: image
+  options: { media: gallery }
+  list:
+    grid: { columns: 4, aspect: "4/3" }
+```
+
+`grid` only works on `object` and `image` fields. Using it on any other type fails config validation. `min` and `max` still apply alongside `grid`. `collapsible` is ignored in grid mode.
+
+**What editors can do:**
+
+| Action | How |
+| --- | --- |
+| Reorder | Drag a tile, or use the grip button that appears on hover (keyboard-accessible). Saved order = grid order. |
+| Edit an item | Click a tile. Its fields (e.g. alt text) open in a dialog. |
+| Remove | Hover a tile → trash icon → confirm. Hidden when readonly or at `min`. |
+| Add photos | **Upload** (or drop files on the grid) or **Select** from the media library. This adds one item per image, with the image subfield filled in. |
+| Add an empty item | **Add an item** creates the item and opens it for editing. |
+
+The add buttons disappear once `max` is reached. An item that fails validation (e.g. a description but no photo) gets a red outline, and its dialog shows the error. A tile with no image shows a placeholder.
+
+**Code:** `components/entry/entry-form.tsx` (`ListGrid`, `GridTile`, and the grid branch in `ListField`), `lib/config-schema.ts` (`ListGridSchema`), `lib/utils/aspect-ratio.ts`, `types/field.ts`, and a `style` prop on `components/thumbnail.tsx`. Lists without `grid` are unaffected.
+
+The same commit also fixes an upstream validation bug: `list: { min: 1 }` without `collapsible` used to fail. `collapsible` is now optional.
+
+**Known limitation (upstream behavior, not specific to the grid):** an added item left completely blank saves as `{ "image": null }` without a required-field error. Validation only runs once some field in the item has a value.
+
 ---
 
 ## Environment variables (`/opt/pages-cms/.env`)
