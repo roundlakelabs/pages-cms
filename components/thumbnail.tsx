@@ -10,13 +10,11 @@ import { Ban, ImageOff, Loader } from "lucide-react";
 export function Thumbnail({
   name,
   path,
-  className,
-  style
+  className
 }: {
   name: string,
   path: string | null;
   className?: string;
-  style?: React.CSSProperties;
 }) {
   const [rawUrl, setRawUrl] = useState<string | null>(null);
   const [error, setError] = useState(null);
@@ -51,7 +49,6 @@ export function Thumbnail({
         "bg-muted w-full aspect-square overflow-hidden relative",
         className
       )}
-      style={style}
     >
       {path
         ? rawUrl
