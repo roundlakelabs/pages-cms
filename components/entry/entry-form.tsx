@@ -23,7 +23,17 @@ import {
   getDefaultValue,
   generateZodSchema,
   sanitizeObject,
+  getSchemaByName,
+  getFieldByPath,
 } from "@/lib/schema";
+import { useConfig } from "@/contexts/config-context";
+import { Thumbnail } from "@/components/thumbnail";
+import { MediaUpload } from "@/components/media/media-upload";
+import { MediaDialog } from "@/components/media/media-dialog";
+import { getAllowedExtensions } from "@/fields/core/image";
+import { normalizeMediaPath, normalizePath } from "@/lib/utils/file";
+import { parseAspectRatio } from "@/lib/utils/aspect-ratio";
+import type { FileSaveData } from "@/types/api";
 import { Field } from "@/types/field";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -50,6 +60,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -69,6 +87,7 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
+  rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
   restrictToVerticalAxis,
@@ -85,6 +104,8 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronRight,
+  FolderOpen,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { interpolate } from "@/lib/schema";
@@ -299,6 +320,406 @@ const ListItemRow = memo(function ListItemRow({
   );
 });
 
+type ListGridConfig = {
+  columns: number;
+  aspectRatio: string;
+  // Path of the image inside each item; null when the item itself is the image.
+  imageKey: string | null;
+  imageField?: Field;
+};
+
+const getListGridConfig = (field: Field): ListGridConfig | null => {
+  if (typeof field.list !== "object" || !field.list?.grid) return null;
+  if (!["object", "image"].includes(field.type)) return null;
+  const grid = field.list.grid;
+
+  let imageKey: string | null = null;
+  let imageField: Field | undefined;
+  if (field.type === "image") {
+    imageField = field;
+  } else {
+    imageKey =
+      grid.image ??
+      field.fields?.find((subfield) => subfield.type === "image")?.name ??
+      null;
+    imageField = imageKey && field.fields ? getFieldByPath(field.fields, imageKey) : undefined;
+  }
+
+  return {
+    columns: grid.columns ?? 4,
+    aspectRatio: parseAspectRatio(grid.aspect),
+    imageKey,
+    imageField,
+  };
+};
+
+const GridTile = memo(function GridTile({
+  id,
+  fieldName,
+  index,
+  imageKey,
+  media,
+  aspectRatio,
+  readonly,
+  canRemove,
+  onOpen,
+  onRequestRemove,
+}: {
+  id: string;
+  fieldName: string;
+  index: number;
+  imageKey: string | null;
+  media?: string;
+  aspectRatio: string;
+  readonly: boolean;
+  canRemove: boolean;
+  onOpen: (index: number) => void;
+  onRequestRemove: (index: number) => void;
+}) {
+  const itemName = `${fieldName}.${index}`;
+  const {
+    control,
+    formState: { errors },
+  } = useFormContext();
+  const imageValue = useWatch({
+    control,
+    name: imageKey ? `${itemName}.${imageKey}` : itemName,
+  });
+  const imagePath = Array.isArray(imageValue) ? imageValue[0] : imageValue;
+  const hasErrors = hasFieldPathError(errors, itemName);
+
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id, disabled: readonly });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn("group relative min-w-0", isDragging ? "opacity-50 z-50" : "z-10")}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+    >
+      <button
+        type="button"
+        className={cn(
+          "block w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          hasErrors && "ring-2 ring-destructive",
+          !readonly && "cursor-move",
+        )}
+        onClick={() => onOpen(index)}
+        onPointerDown={readonly ? undefined : (listeners?.onPointerDown as React.PointerEventHandler | undefined)}
+        aria-label={`Edit item #${index + 1}`}
+      >
+        <Thumbnail
+          name={media ?? ""}
+          path={typeof imagePath === "string" && imagePath ? imagePath : null}
+          className="aspect-auto rounded-md"
+          style={{ aspectRatio }}
+        />
+      </button>
+      {!readonly && (
+        <div className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon-xs"
+            className="cursor-move"
+            aria-label="Reorder item"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical />
+          </Button>
+          {canRemove && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon-xs"
+              aria-label="Remove item"
+              onClick={() => onRequestRemove(index)}
+            >
+              <Trash2 />
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const ListGrid = ({
+  field,
+  fieldName,
+  grid,
+  arrayFields,
+  renderFields,
+  registerBeforeSubmitHook,
+  onAppend,
+  onRemove,
+  onMove,
+}: {
+  field: FieldWithReadonlyMeta;
+  fieldName: string;
+  grid: ListGridConfig;
+  arrayFields: { id: string }[];
+  renderFields: RenderFields;
+  registerBeforeSubmitHook?: RegisterBeforeSubmitHook;
+  onAppend: (items: unknown[]) => void;
+  onRemove: (index: number) => void;
+  onMove: (from: number, to: number) => void;
+}) => {
+  const { config } = useConfig();
+  const isReadonly = Boolean(field.readonly);
+  const listOptions = typeof field.list === "object" ? field.list : undefined;
+  const min = listOptions?.min ?? 0;
+  const max = listOptions?.max;
+  const remainingSlots = max ? max - arrayFields.length : Infinity;
+  const canRemove = arrayFields.length > min;
+
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [pendingRemoveIndex, setPendingRemoveIndex] = useState<number | null>(null);
+
+  const imageOptions = (grid.imageField?.options ?? {}) as {
+    media?: string | false;
+    path?: string;
+    multiple?: unknown;
+    rename?: boolean | "safe" | "random";
+  };
+  const mediaConfig = useMemo(() => {
+    if (!config?.object?.media?.length || imageOptions.media === false) return undefined;
+    return typeof imageOptions.media === "string"
+      ? getSchemaByName(config.object, imageOptions.media, "media")
+      : config.object.media[0];
+  }, [config?.object, imageOptions.media]);
+  const uploadPath = imageOptions.path ? normalizePath(imageOptions.path) : mediaConfig?.input;
+  const allowedExtensions = useMemo(
+    () => (grid.imageField && mediaConfig ? getAllowedExtensions(grid.imageField, mediaConfig) : undefined),
+    [grid.imageField, mediaConfig],
+  );
+
+  // Builds a new list item with the image filled in.
+  const createItem = useCallback(
+    (imagePath?: string) => {
+      const path = imagePath ? normalizeMediaPath(imagePath) : undefined;
+      const imageValue = path && imageOptions.multiple ? [path] : path;
+      if (field.type === "image") return imageValue ?? getDefaultValue({ ...field, list: undefined });
+      const item = initializeState(field.fields, {});
+      if (grid.imageKey && imageValue !== undefined) {
+        // Support dotted paths (e.g. "photo.src") for the image subfield.
+        const keys = grid.imageKey.split(".");
+        let target = item;
+        keys.slice(0, -1).forEach((key) => {
+          target[key] = target[key] ?? {};
+          target = target[key];
+        });
+        target[keys[keys.length - 1]] = imageValue;
+      }
+      return item;
+    },
+    [field, grid.imageKey, imageOptions.multiple],
+  );
+
+  const addEmptyItem = () => {
+    onAppend([createItem()]);
+    setEditingIndex(arrayFields.length);
+  };
+
+  const addImages = useCallback(
+    (paths: string[]) => {
+      const allowed = Number.isFinite(remainingSlots) ? paths.slice(0, Math.max(remainingSlots, 0)) : paths;
+      if (allowed.length) onAppend(allowed.map((path) => createItem(path)));
+    },
+    [createItem, onAppend, remainingSlots],
+  );
+
+  const handleUpload = useCallback(
+    (fileData: FileSaveData) => {
+      if (fileData.path) addImages([fileData.path]);
+    },
+    [addImages],
+  );
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const sortableItems = useMemo(() => arrayFields.map((item) => item.id), [arrayFields]);
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (isReadonly) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = arrayFields.findIndex((item) => item.id === active.id);
+    const newIndex = arrayFields.findIndex((item) => item.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    onMove(oldIndex, newIndex);
+  };
+
+  const handleRequestRemove = useCallback((index: number) => setPendingRemoveIndex(index), []);
+  const handleOpen = useCallback((index: number) => setEditingIndex(index), []);
+
+  // Edit the item without list chrome (collapsible header, list description); it's a single item in a dialog.
+  const itemField = useMemo<FieldWithReadonlyMeta>(
+    () => ({ ...field, list: undefined, description: undefined }),
+    [field],
+  );
+  const editingId = editingIndex !== null ? arrayFields[editingIndex]?.id : undefined;
+  const canUseMedia = Boolean(mediaConfig && grid.imageField);
+  const canAdd = !isReadonly && remainingSlots > 0;
+
+  const gridNode = (
+    <div className="space-y-2">
+      {arrayFields.length > 0 ? (
+        <div
+          className="grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))` }}
+        >
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={sortableItems} strategy={rectSortingStrategy}>
+              {arrayFields.map((arrayField, index) => (
+                <GridTile
+                  key={arrayField.id}
+                  id={arrayField.id}
+                  fieldName={fieldName}
+                  index={index}
+                  imageKey={grid.imageKey}
+                  media={mediaConfig?.name}
+                  aspectRatio={grid.aspectRatio}
+                  readonly={isReadonly}
+                  canRemove={canRemove}
+                  onOpen={handleOpen}
+                  onRequestRemove={handleRequestRemove}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No items
+        </div>
+      )}
+      {canAdd && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {canUseMedia && (
+            <>
+              <MediaUpload.Trigger>
+                <Button type="button" variant="outline" size="sm">
+                  <Upload />
+                  Upload
+                </Button>
+              </MediaUpload.Trigger>
+              <MediaDialog
+                media={mediaConfig.name}
+                initialPath={uploadPath}
+                maxSelected={Number.isFinite(remainingSlots) ? remainingSlots : undefined}
+                extensions={allowedExtensions}
+                onSubmit={addImages}
+              >
+                <Button type="button" variant="outline" size="sm">
+                  <FolderOpen />
+                  Select
+                </Button>
+              </MediaDialog>
+            </>
+          )}
+          <Button type="button" variant="outline" size="sm" onClick={addEmptyItem}>
+            <Plus />
+            Add an item
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {canUseMedia ? (
+        <MediaUpload
+          path={uploadPath}
+          media={mediaConfig.name}
+          extensions={allowedExtensions}
+          onUpload={handleUpload}
+          multiple
+          rename={imageOptions.rename ?? mediaConfig.rename}
+          disabled={!canAdd}
+        >
+          <MediaUpload.DropZone>{gridNode}</MediaUpload.DropZone>
+        </MediaUpload>
+      ) : (
+        gridNode
+      )}
+      <Dialog
+        open={editingIndex !== null && editingId !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setEditingIndex(null);
+        }}
+      >
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+          onOpenAutoFocus={(event) => {
+            // Focus the dialog itself rather than the first control (which opens its tooltip).
+            event.preventDefault();
+            (event.currentTarget as HTMLElement | null)?.focus();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {field.label || field.name} #{(editingIndex ?? 0) + 1}
+            </DialogTitle>
+            <DialogDescription className="sr-only">Edit this item.</DialogDescription>
+          </DialogHeader>
+          {editingIndex !== null && editingId && (
+            <div className="grid gap-6">
+              <SingleField
+                field={itemField}
+                fieldName={`${fieldName}.${editingIndex}`}
+                keyPrefix={editingId}
+                renderFields={renderFields}
+                registerBeforeSubmitHook={registerBeforeSubmitHook}
+                showLabel={false}
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" onClick={() => setEditingIndex(null)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={pendingRemoveIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveIndex(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this item?</AlertDialogTitle>
+            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingRemoveIndex !== null) onRemove(pendingRemoveIndex);
+                setPendingRemoveIndex(null);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+};
+
 const ListField = ({
   field,
   fieldName,
@@ -312,9 +733,11 @@ const ListField = ({
   registerBeforeSubmitHook?: RegisterBeforeSubmitHook;
   runBeforeSubmitHooks?: () => Promise<void>;
 }) => {
+  const gridConfig = useMemo(() => getListGridConfig(field), [field]);
   const supportsItemCollapse =
     field.type === "object" || field.type === "block";
   const isCollapsible = !!(
+    !gridConfig &&
     supportsItemCollapse &&
     field.list &&
     !(typeof field.list === "object" && field.list?.collapsible === false)
@@ -459,6 +882,25 @@ const ListField = ({
     setOpenStates(Array(arrayFields.length).fill(!collapsed));
   };
 
+  // Synchronous on purpose: the media dialog closes right after this, and a
+  // deferred append lands mid-close. Grid items only mount editors inside the
+  // item dialog, so there are no pending before-submit hooks to flush here.
+  const handleGridAppend = useCallback(
+    (items: unknown[]) => {
+      if (isReadonly) return;
+      append(items);
+    },
+    [append, isReadonly],
+  );
+  const handleGridMove = useCallback(
+    async (from: number, to: number) => {
+      if (isReadonly) return;
+      await runBeforeSubmitHooks?.();
+      move(from, to);
+    },
+    [isReadonly, move, runBeforeSubmitHooks],
+  );
+
   // We don't render <FormMessage/> in ListField, because it's already rendered in the individual fields
   return (
     <FormField
@@ -504,6 +946,22 @@ const ListField = ({
                 })()}
             </div>
           )}
+          {gridConfig ? (
+            <div className="space-y-2">
+              <ListGrid
+                field={field}
+                fieldName={fieldName}
+                grid={gridConfig}
+                arrayFields={arrayFields}
+                renderFields={renderFields}
+                registerBeforeSubmitHook={registerBeforeSubmitHook}
+                onAppend={handleGridAppend}
+                onRemove={removeItem}
+                onMove={handleGridMove}
+              />
+              <FormMessage />
+            </div>
+          ) : (
           <div className="space-y-2">
             <DndContext
               sensors={sensors}
@@ -552,6 +1010,7 @@ const ListField = ({
             </div>
             <FormMessage />
           </div>
+          )}
         </FormItem>
       )}
     />
