@@ -38,7 +38,10 @@ import {
   normalizeMediaPath,
   normalizePath,
 } from "@/lib/utils/file";
-import type { ApiResponse, FileSaveData } from "@/types/api";
+import { requireApiSuccess } from "@/lib/api-client";
+import { prepareMediaUpload } from "@/lib/media-upload";
+import { toast } from "sonner";
+import type { ApiSuccess, FileSaveData } from "@/types/api";
 import type { Field } from "@/types/field";
 import "./edit-component.css";
 
@@ -48,6 +51,7 @@ type MediaSchema = {
   output: string;
   extensions?: string[];
   rename?: boolean | "safe" | "random";
+  resize?: unknown;
 };
 
 type FieldOptions = {
@@ -772,45 +776,51 @@ const EditComponent = forwardRef(
           );
         }
 
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result ?? ""));
-          reader.onerror = () =>
-            reject(new Error("Failed to read image file."));
-          reader.readAsDataURL(file);
-        });
-        const content = dataUrl.replace(/^(.+,)/, "");
-        const uploadFilename = getUploadFileName(
-          file.name,
-          options.rename ?? mediaConfig.rename,
-        );
-        const targetPath = joinPathSegments([
-          rootPath ?? mediaConfig.input,
-          uploadFilename,
-        ]);
-
-        const response = await fetch(
-          `/api/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/files/${encodeURIComponent(targetPath)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              type: "media",
-              name: mediaConfig.name,
-              content,
-            }),
-          },
-        );
-        if (!response.ok) {
-          throw new Error(
-            `Failed to upload file: ${response.status} ${response.statusText}`,
+        let notice: string | null;
+        let payload: ApiSuccess<FileSaveData>;
+        let targetPath: string;
+        try {
+          const prepared = await prepareMediaUpload(file, {
+            resize: mediaConfig.resize,
+            extensions:
+              allowedExtensions.length > 0
+                ? allowedExtensions
+                : mediaConfig.extensions,
+          });
+          notice = prepared.notice;
+          const uploadFilename = getUploadFileName(
+            prepared.file.name,
+            options.rename ?? mediaConfig.rename,
           );
+          targetPath = joinPathSegments([
+            rootPath ?? mediaConfig.input,
+            uploadFilename,
+          ]);
+
+          const response = await fetch(
+            `/api/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/files/${encodeURIComponent(targetPath)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "media",
+                name: mediaConfig.name,
+                content: prepared.content,
+              }),
+            },
+          );
+          payload = await requireApiSuccess<ApiSuccess<FileSaveData>>(
+            response,
+            "Failed to upload file",
+          );
+        } catch (error) {
+          toast.error(
+            error instanceof Error ? error.message : "Failed to upload image",
+          );
+          throw error;
         }
 
-        const payload = (await response.json()) as ApiResponse<FileSaveData>;
-        if (payload.status !== "success") {
-          throw new Error(payload.message);
-        }
+        if (notice) toast.info(notice);
 
         const uploadedPath = payload.data.path || targetPath;
         const src = await toDisplayImageUrl(uploadedPath);
