@@ -184,6 +184,38 @@ const MediaConfigObject = z
         },
       )
       .optional(),
+    resize: z
+      .union([
+        z.boolean({ message: "'resize' must be a boolean or an object." }),
+        z
+          .object(
+            {
+              width: z
+                .number({ message: "'width' must be a number." })
+                .int("'width' must be an integer.")
+                .min(1, "'width' must be at least 1.")
+                .optional(),
+              height: z
+                .number({ message: "'height' must be a number." })
+                .int("'height' must be an integer.")
+                .min(1, "'height' must be at least 1.")
+                .optional(),
+              quality: z
+                .number({ message: "'quality' must be a number." })
+                .min(1, "'quality' must be between 1 and 100.")
+                .max(100, "'quality' must be between 1 and 100.")
+                .optional(),
+              format: z
+                .enum(["original", "jpeg", "webp"], {
+                  message: "'format' must be 'original', 'jpeg', or 'webp'.",
+                })
+                .optional(),
+            },
+            { message: "'resize' must be a boolean or an object." },
+          )
+          .strict(),
+      ])
+      .optional(),
     rename: z
       .union([
         z.boolean({

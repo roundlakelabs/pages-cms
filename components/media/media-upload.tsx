@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { getSchemaByName } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 import { requireApiSuccess } from "@/lib/api-client";
+import { prepareMediaUpload } from "@/lib/media-upload";
 import type { FileSaveData } from "@/types/api";
 
 interface MediaUploadContextValue {
@@ -66,21 +67,13 @@ function MediaUploadRoot({ children, path, onUpload, media, extensions, multiple
   const handleFiles = useCallback(async (files: File[]) => {
     try {
       for (const file of files) {
-        const uploadFilename = getUploadFileName(
-          file.name,
-          rename ?? configMedia?.rename,
-        );
-
         const uploadPromise = (async () => {
-          const content = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const base64Content = (reader.result as string).replace(/^(.+,)/, "");
-              resolve(base64Content);
-            };
-            reader.onerror = () => reject(new Error("Failed to read file"));
-            reader.readAsDataURL(file);
-          });
+          const prepared = await prepareMediaUpload(file, configMedia);
+          const uploadFilename = getUploadFileName(
+            prepared.file.name,
+            rename ?? configMedia?.rename,
+          );
+          const content = prepared.content;
 
           const fullPath = joinPathSegments([path ?? "", uploadFilename]);
           const response = await fetch(`/api/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/files/${encodeURIComponent(fullPath)}`, {
@@ -98,14 +91,14 @@ function MediaUploadRoot({ children, path, onUpload, media, extensions, multiple
             "Failed to upload file",
           );
 
-          return data.data as FileSaveData;
+          return { entry: data.data as FileSaveData, notice: prepared.notice };
         })();
 
         await toast.promise(uploadPromise, {
           loading: `Uploading ${file.name}`,
-          success: (savedEntry) => {
-            onUpload?.(savedEntry);
-            return `Uploaded ${file.name}`;
+          success: ({ entry, notice }) => {
+            onUpload?.(entry);
+            return { message: `Uploaded ${file.name}`, description: notice ?? undefined };
           },
           error: (error: unknown) => error instanceof Error ? error.message : "Upload failed",
         });
@@ -113,7 +106,7 @@ function MediaUploadRoot({ children, path, onUpload, media, extensions, multiple
     } catch (error) {
       console.error(error);
     }
-  }, [config, path, configMedia?.name, configMedia?.rename, onUpload, rename]);
+  }, [config, path, configMedia, onUpload, rename]);
 
   const contextValue = useMemo(() => ({
     handleFiles,

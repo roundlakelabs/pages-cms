@@ -18,7 +18,10 @@ const requireApiSuccess = async <T = any>(
   const payload = await parseJsonSafely<T & ApiResponseLike>(response);
 
   if (!response.ok) {
-    const message = payload?.message || `${fallbackMessage}: ${response.status} ${response.statusText}`;
+    const message = payload?.message
+      || (response.status === 413
+        ? "The file is too large to upload. Compress or resize it and try again."
+        : `${fallbackMessage}: ${response.status} ${response.statusText}`);
     throw new Error(message);
   }
 

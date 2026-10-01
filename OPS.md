@@ -188,6 +188,34 @@ The same commit also fixes an upstream validation bug: `list: { min: 1 }` withou
 
 **Known limitation (upstream behavior, not specific to the grid):** an added item left completely blank saves as `{ "image": null }` without a required-field error. Validation only runs once some field in the item has a value.
 
+### 4. Image resizing on upload and upload size limit (`media.resize`)
+
+Photos are resized and re-encoded **in the browser** before upload, both in the media library and when images are pasted or dropped into the rich-text editor. After an upload, a toast tells the editor what changed (for example `6000×4000 → 2400×1600, 3.2 MB → 444 KB`). This is on by default for every media folder.
+
+- Only JPEG, PNG and WebP are processed. GIF, SVG, AVIF and HEIC files are uploaded unchanged.
+- An image is resized when it's larger than the bounds. A JPEG/WebP that's already within the bounds is re-encoded only if it's over 1.5 MB, and only kept if that makes it smaller.
+- EXIF metadata, including GPS location, is removed. Orientation is applied first, so images don't end up sideways.
+
+Defaults, and how to override them per media folder in `.pages.yml`:
+
+```yaml
+media:
+  input: images
+  output: /images
+  resize:
+    width: 2400       # max width in px (default 2400)
+    height: 2400      # max height in px (default 2400)
+    quality: 85       # 1–100, for JPEG/WebP (default 85)
+    format: original  # original | jpeg | webp (default original)
+  # resize: false     # turn it off for this folder
+```
+
+`format: webp` renames the file (`office.jpg` → `office.webp`). If the folder's `extensions` don't allow `webp`, the original format is kept.
+
+**Upload size limit:** about 18.7 MB per file. Uploads are sent base64-encoded in JSON, which inflates them by about 33%, and the request body limit is 25 MB in two places that must match: `client_max_body_size` in nginx and `experimental.proxyClientMaxBodySize` in `next.config.mjs`. Without the Next.js setting, `proxy.ts` silently truncates bodies at 10 MB and uploads fail with `SyntaxError: Unterminated string in JSON`. If you change the limit, also update `MAX_UPLOAD_BODY_BYTES` in `lib/media-upload.ts`. Files over the limit are rejected in the browser with a message giving the file's size and the limit. The server also returns a clear 413 error.
+
+**Code:** `lib/media-upload.ts` (resizing, size check), `components/media/media-upload.tsx`, `fields/core/rich-text/edit-component.tsx`, `lib/config-schema.ts` (`resize`), `lib/api-client.ts` (413 message), `app/api/[owner]/[repo]/[branch]/files/[path]/route.ts` (413 check), `next.config.mjs`.
+
 ---
 
 ## Environment variables (`/opt/pages-cms/.env`)
@@ -433,7 +461,8 @@ Admin GitHub login works, a non-admin GitHub login is refused, an invited email 
 | Logged in but bounced back to login | `BASE_URL` differs from the URL being visited. |
 | Users logged out every ~8 hours | Token expiration is still on in the GitHub App settings. |
 | Content doesn't refresh after a push | Webhook failing. Check Advanced → Recent Deliveries on the GitHub App; usually a secret mismatch. |
-| Image upload fails | `client_max_body_size` in nginx is too small. |
+| Image upload fails | File over the ~18.7 MB limit, or `client_max_body_size` (nginx) / `proxyClientMaxBodySize` (`next.config.mjs`) too small. See "Image resizing on upload" above. |
+| Log shows `Request body exceeded 10MB` + `Unterminated string in JSON` | `proxyClientMaxBodySize` is missing from `next.config.mjs`. Rebuild after adding it. |
 | Repo not visible in the CMS | App not installed on it, the user lacks access or wasn't invited to it, or there's no `.pages.yml`. |
 | `.env` change has no effect | Restart the service. The app only reads `.env` at startup. |
 

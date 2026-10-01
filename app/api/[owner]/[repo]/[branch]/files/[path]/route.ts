@@ -6,7 +6,8 @@ import { configVersion, parseConfig, normalizeConfig } from "@/lib/config";
 import { stringify, parse } from "@/lib/serialization";
 import { deepMap, generateZodSchema, getSchemaByName, sanitizeObject } from "@/lib/schema";
 import { getConfig, updateConfig } from "@/lib/config-store";
-import { getFileExtension, getFileName, normalizePath, serializedTypes, getParentPath } from "@/lib/utils/file";
+import { getFileExtension, getFileName, getFileSize, normalizePath, serializedTypes, getParentPath } from "@/lib/utils/file";
+import { MAX_UPLOAD_BODY_BYTES, MAX_UPLOAD_FILE_BYTES } from "@/lib/media-upload";
 import { assertGithubIdentity } from "@/lib/authz-shared";
 import { getToken } from "@/lib/token";
 import { updateFileCache } from "@/lib/github-cache-file";
@@ -44,7 +45,18 @@ export async function POST(
     });
     if (!config && normalizedPath !== ".pages.yml") throw new Error(`Configuration not found for ${params.owner}/${params.repo}/${params.branch}.`);
 
-    const data: any = await request.json();
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_UPLOAD_BODY_BYTES) {
+      throw createHttpError(`The file is too large to upload (limit ${getFileSize(MAX_UPLOAD_FILE_BYTES, 1)}). Compress or resize it and try again.`, 413);
+    }
+
+    let data: any;
+    try {
+      data = await request.json();
+    } catch {
+      // Bodies over the proxy limit arrive truncated and fail to parse.
+      throw createHttpError("The request body is invalid or was cut off because the file is too large. Compress or resize it and try again.", 400);
+    }
     const onConflict = data.onConflict === "error" ? "error" : "rename";
 
     let contentBase64;
